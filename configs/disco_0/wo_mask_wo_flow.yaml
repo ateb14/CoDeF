@@ -1,0 +1,26 @@
+img_wh: [256, 256]
+canonical_wh: [256, 256]
+
+lr: 0.001
+bg_loss: 0.003
+
+# ref_idx: null # 0
+ref_idx: 0
+ref_loss_weight: 1.0
+ref_step: 1000000
+
+N_xyz_w: [8,]
+flow_loss: 1
+flow_step: -1
+self_bg: True
+
+deform_hash: True
+vid_hash: True
+
+num_steps: 18000
+decay_step: [2500, 5000, 7500,10000,12500,15000] # for lr scheduler
+annealed_begin_step: 5000
+annealed_step: 10000
+save_model_iters: 2000
+
+fps: 30

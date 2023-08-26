@@ -10,6 +10,7 @@ def init_weights(m):
         nn.init.zeros_(m.bias)
 
 
+# not used
 class TranslationField(nn.Module):
     def __init__(self, D=6, W=128,
                 in_channels_w=8, in_channels_xyz=34,
@@ -68,7 +69,7 @@ class TranslationField(nn.Module):
 
         return t
 
-
+# not used
 class Embedding(nn.Module):
     def __init__(self, in_channels, N_freqs, logscale=True, identity=True):
         """
@@ -111,6 +112,7 @@ class Embedding(nn.Module):
         return torch.cat(out, -1)
 
 
+# actually not used for inference
 class AnnealedEmbedding(nn.Module):
     def __init__(self, in_channels, N_freqs, annealed_step, annealed_begin_step=0, logscale=True, identity=True):
         """
@@ -172,6 +174,9 @@ class AnnealedEmbedding(nn.Module):
 class AnnealedHash(nn.Module):
     def __init__(self, in_channels, annealed_step, annealed_begin_step=0, identity=True):
         """
+        wyy: maybe this is for nerf in 3D
+        wyy: in_channel here is actually 32(16*2) after hash grid encoding
+        
         Defines a function that embeds x to (x, sin(2^k x), cos(2^k x), ...)
         in_channels: number of input channels (3 for both xyz and direction)
         """
@@ -216,7 +221,7 @@ class AnnealedHash(nn.Module):
 
         return out
 
-
+# not used for vid-hash
 class ImplicitVideo(nn.Module):
     def __init__(self,
                  D=8, W=256,
@@ -294,6 +299,7 @@ class ImplicitVideo(nn.Module):
         return out
 
 
+# Canonical Field, currently trainable, but I will try to make it frozen
 class ImplicitVideo_Hash(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -305,16 +311,21 @@ class ImplicitVideo_Hash(nn.Module):
                                     network_config=config["network"])
 
     def forward(self, x):
+        # x.shape = (Num of Pixels, 2)
         input = x
         input = self.encoder(input)
+        # input.shape = (Num of Pixels, n_levels * n_features_per_level) = (..., 32)
         input = torch.cat([x, input], dim=-1)
         weight = torch.ones(input.shape[-1], device=input.device).cuda()
         x = self.decoder(weight * input)
         return x
 
 
+# Deformation Field, trainable
 class Deform_Hash3d(nn.Module):
     def __init__(self, config):
+        # encoder: (x, y, t) -> (x, y, t, features) in feature space
+        # decoder: (x, y, t, features) -> (x, y) in canonical field
         super().__init__()
         self.encoder = tcnn.Encoding(n_input_dims=3,
                                      encoding_config=config["encoding_deform3d"])
@@ -323,8 +334,10 @@ class Deform_Hash3d(nn.Module):
                                     network_config=config["network_deform"])
 
     def forward(self, x, step=0, aneal_func=None):
+        # x.shape = (Num of Pixels, 3)
         input = x
         input = self.encoder(input)
+        # input.shape = (Num of Pixels, n_levels * n_features_per_level) = (..., 32)
         if aneal_func is not None:
             input = torch.cat([x, aneal_func(input,step)], dim=-1)
         else:
@@ -332,6 +345,7 @@ class Deform_Hash3d(nn.Module):
 
         weight = torch.ones(input.shape[-1], device=input.device).cuda()
         x = self.decoder(weight * input) / 5
+
 
         return x
 

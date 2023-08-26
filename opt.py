@@ -112,6 +112,7 @@ def get_opts():
                         help='Step to stop reference frame loss.')
     parser.add_argument('--self_bg', type=bool_parser, default=False,
                         help='Whether to use self background as bg loss.')
+    parser.add_argument('--ref_loss_weight', type=float, default=1)
 
     ##### Special cases: for black-dominated images
     parser.add_argument('--sigmoid_offset', type=float, default=0,

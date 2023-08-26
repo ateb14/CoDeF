@@ -39,6 +39,7 @@ from pytorch_lightning.loggers import TensorBoardLogger
 
 
 class ImplicitVideoSystem(LightningModule):
+    # i.e. the canonical field
     def __init__(self, hparams):
         super(ImplicitVideoSystem, self).__init__()
         self.save_hyperparameters(hparams)
@@ -49,8 +50,11 @@ class ImplicitVideoSystem(LightningModule):
             self.dual_video_visualizer = VideoVisualizer(fps=hparams.fps)
 
         self.models_to_train=[]
+
+        # embedding_xyz is not for vid_hash
         self.embedding_xyz = Embedding(2, 8)
         self.embeddings = {'xyz': self.embedding_xyz}
+
         self.models = {}
 
         # Construct normalized meshgrid.
@@ -68,6 +72,7 @@ class ImplicitVideoSystem(LightningModule):
         if hparams.encode_w:
             # Multiple deformation MLP.
             # Progressive Training for the Deformation (Annealed PE).
+
             # No trainable parameters.
             self.embeddings['xyz_w'] = []
             assert (isinstance(self.hparams.N_xyz_w, list))
@@ -94,6 +99,7 @@ class ImplicitVideoSystem(LightningModule):
                     self.embeddings['xyz_w'] += [self.embedding_xyz_w]
 
             for i in range(self.num_models):
+                # not used for deform_hash
                 embedding_w = torch.nn.Embedding(hparams.N_vocab_w, hparams.N_w)
                 torch.nn.init.uniform_(embedding_w.weight, -0.05, 0.05)
                 load_ckpt(embedding_w, hparams.weight_path, model_name=f'w_{i}')
@@ -140,6 +146,7 @@ class ImplicitVideoSystem(LightningModule):
         self.models_to_train += [self.models]
 
     def deform_pts(self, ts_w, grid, encode_w, step=0, i=0):
+        # if encode_w == False, then simply return the original grid
         if hparams.deform_hash:
             ts_w_norm = ts_w / self.seq_len
             ts_w_norm = ts_w_norm.repeat(grid.shape[0], 1)
@@ -152,7 +159,7 @@ class ImplicitVideoSystem(LightningModule):
             else:
                 deform = self.models[f'warping_field_{i}'](input_xyt)
             if encode_w:
-                deformed_grid = deform + grid
+                deformed_grid = deform + grid # deform: delta x, delta y
             else:
                 deformed_grid = grid
         else:
@@ -182,6 +189,7 @@ class ImplicitVideoSystem(LightningModule):
                 flows=None):
         # grid -> positional encoding
         # ts_w -> embedding
+        # if encode_w == False, input grid remains unchanged so given a canonical grid it will return a canonical image
         grid = rearrange(grid, 'b n c -> (b n) c')
         results_list = []
         flow_loss_list = []
@@ -202,13 +210,17 @@ class ImplicitVideoSystem(LightningModule):
                 pe_deformed_grid = (deformed_grid + 0.3) / 1.6
             else:
                 pe_deformed_grid = self.embeddings['xyz'](deformed_grid)
+
+            # use the canonical image as the canonical field
             if not self.training and self.hparams.canonical_dir is not None:
                 w, h = self.img_wh
                 canonical_img = self.canonical_img.squeeze(0)
                 h_c, w_c = canonical_img.shape[1:3]
                 grid_new = deformed_grid.clone()
+                # normalize the grid to [-1, 1]
                 grid_new[..., 1] = (2 * deformed_grid[..., 0] - 1) * h / h_c
                 grid_new[..., 0] = (2 * deformed_grid[..., 1] - 1) * w / w_c
+
                 if len(canonical_img.shape) == 3:
                     canonical_img = canonical_img.unsqueeze(0)
                 results = torch.nn.functional.grid_sample(
@@ -217,7 +229,7 @@ class ImplicitVideoSystem(LightningModule):
                     mode='bilinear',
                     padding_mode='border')
                 results = results.squeeze().permute(1,0)
-            else:
+            else: # use the canonical field defined by MLP
                 results = self.models[f'implicit_video_{i}'](pe_deformed_grid)
 
             results_list.append(results)
@@ -305,28 +317,34 @@ class ImplicitVideoSystem(LightningModule):
                             flows=flows)
 
         # Mannually set a reference frame.
-        if self.hparams.ref_step < 0: self.hparams.step = 1e10
+        # wyy: seems like that by default reference loss is empty
+        if self.hparams.ref_step < 0: self.hparams.ref_step = 1e10
         if (self.hparams.ref_idx is not None
                 and self.global_step < self.hparams.ref_step):
-            rgbs_c_flattend = rearrange(ref_batch[0],
+            if self.hparams.ref_idx >= self.seq_len:
+                raise ValueError(f'ref_idx should be smaller than seq_len {self.seq_len}')
+            ref_frame_flattend = rearrange(ref_batch[self.hparams.ref_idx],
                                         'b h w c -> (b h w) c')
-            ret_c = self(ts_w, grid, False, self.global_step, flows=flows)
+            # get a canonical image
+            canonical_img = self.forward(ts_w, grid, False, self.global_step, flows=flows)
 
         # Loss computation.
-        for i in range(self.num_models):
-            results = ret.rgbs[i]
-            mk_t = rearrange(mk[i], 'b h w c -> (b h w) c')
+        for model_idx in range(self.num_models):
+            results = ret.rgbs[model_idx]
+            mk_t = rearrange(mk[model_idx], 'b h w c -> (b h w) c')
             mk_t = mk_t.sum(dim=-1) > 0.05
 
             if (self.hparams.ref_idx is not None
                 and self.global_step < self.hparams.ref_step):
-                mk_c_t = rearrange(ref_batch[1][i], 'b h w c -> (b h w) c')
+                mk_c_t = rearrange(ref_batch[1][model_idx], 'b h w c -> (b h w) c')
                 mk_c_t = mk_c_t.sum(dim=-1) > 0.05
 
             # Background regularization.
             if self.hparams.bg_loss:
                 mk1 = torch.logical_not(mk_t)
                 if self.hparams.self_bg:
+                    # default
+                    # same as MSE color loss
                     grid_flattened = rgbs_flattend
                 else:
                     grid_flattened = rearrange(grid, 'b n c -> (b n) c')
@@ -366,19 +384,20 @@ class ImplicitVideoSystem(LightningModule):
             if ret.flow_loss[0] != 0:
                 mk_flow_t = torch.logical_and(mk_t, flows[0].sum(dim=-1)< 3)
                 loss = loss + torch.nn.functional.l1_loss(
-                    ret.flow_loss[i][0][mk_flow_t], ret.flow_loss[i][1]
+                    ret.flow_loss[model_idx][0][mk_flow_t], ret.flow_loss[model_idx][1]
                     [mk_flow_t]) * self.hparams.flow_loss
 
             # Reference loss.
+            # wyy: a regularizer to make the canonical image look like the ref img
             if (self.hparams.ref_idx is not None
                     and self.global_step < self.hparams.ref_step):
-                results_c = ret_c.rgbs[i]
+                results_c = canonical_img.rgbs[model_idx]
                 loss += self.color_loss(results_c[mk_c_t],
-                                        rgbs_c_flattend[mk_c_t])
+                                        ref_frame_flattend[mk_c_t]) * self.hparams.ref_loss_weight
 
             # PSNR metric.
             with torch.no_grad():
-                if i == 0:
+                if model_idx == 0:
                     psnr_ = psnr(results[mk_t], rgbs_flattend[mk_t])
 
         self.log('lr', get_learning_rate(self.optimizer), prog_bar=True)
@@ -444,6 +463,7 @@ class ImplicitVideoSystem(LightningModule):
             video_name = f'{sample_name}_{self.hparams.exp_name}'
         Path(test_dir).mkdir(parents=True, exist_ok=True)
 
+        # batch_idx = timestep of frame
         if batch_idx > 0 and self.hparams.save_video:
             self.video_visualizer.set_path(os.path.join(
                 test_dir, f'{video_name}.mp4'))
@@ -454,11 +474,12 @@ class ImplicitVideoSystem(LightningModule):
 
         if batch_idx == 0 and self.hparams.canonical_dir is None:
             # Save the canonical image.
-            ret = self(ts_w, grid_c, False, self.global_step)
+            ret = self.forward(ts_w, grid_c, False, self.global_step)
 
-        ret_n = self(ts_w, grid, self.hparams.encode_w, self.global_step)
+        ret_n = self.forward(ts_w, grid, self.hparams.encode_w, self.global_step)
 
         img = np.zeros((H * W, 3), dtype=np.float32)
+        # save the canonical image(s) when tesing the first frame in reconstructio model
         for i in range(self.num_models):
             if batch_idx == 0 and self.hparams.canonical_dir is None:
                 results_c = ret.rgbs[i]
@@ -471,6 +492,7 @@ class ImplicitVideoSystem(LightningModule):
 
                 img_c = cv2.cvtColor(img_c, cv2.COLOR_BGR2RGB)
                 cv2.imwrite(f'{test_dir}/canonical_{i}.png', img_c * 255)
+                print(f'Saved canonical image {i} to {test_dir}/canonical_{i}.png')
 
             mk_n = rearrange(mk[i], 'b h w c -> (b h w) c')
             mk_n = mk_n.sum(dim=-1) > 0.05

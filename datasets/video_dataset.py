@@ -46,7 +46,7 @@ class VideoDataset(Dataset):
         self.grid = torch.from_numpy(rearrange(grid, 'c h w -> (h w) c'))
         warp_code = 1
         for input_image_path in sorted(glob.glob(f'{self.root_dir}/*')):
-            print(input_image_path)
+            # print(input_image_path)
             all_images_path.append(input_image_path)
             self.ts_w.append(torch.Tensor([warp_code]).long())
             warp_code += 1
@@ -141,16 +141,25 @@ class VideoDataset(Dataset):
     def __getitem__(self, idx):
         if self.split == 'train' or self.split == 'val':
             idx = idx % len(self.all_images)
+            # print(self.ts_w[idx])
+            # print(self.all_images[idx].shape)
+            # print(self.grid.shape)
+            # tensor([1])
+            # torch.Size([540, 540, 3])
+            # torch.Size([291600, 2])
+            # exit(0)
+            ret_mask = self.all_masks[len(self.mask_dir)*idx:len(self.mask_dir)*idx+len(self.mask_dir)] if self.mask_dir else [torch.ones((self.img_wh[1], self.img_wh[0], 1))]
+
             sample = {'rgbs': self.all_images[idx],
                       'canonical_img': self.all_images[idx] if self.canonical_dir is None else self.canonical_img,
                       'ts_w': self.ts_w[idx],
                       'grid': self.grid,
                       'canonical_wh': self.canonical_wh,
                       'img_wh': self.img_wh,
-                      'masks': self.all_masks[len(self.mask_dir)*idx:len(self.mask_dir)*idx+len(self.mask_dir)] if self.mask_dir else [torch.ones((self.img_wh[1], self.img_wh[0], 1))],
+                      'masks': ret_mask,
                       'flows': self.all_flows[idx] if (idx<len(self.all_images)-2)&(self.all_flows is not None) else -1e5,
                       'grid_c': self.grid_c,
-                      'reference': [self.all_images[self.ref_idx], self.all_masks[len(self.mask_dir)*idx:len(self.mask_dir)*idx+len(self.mask_dir)]] if not self.ref_idx is None else -1e5,
+                      'reference': [self.all_images[self.ref_idx], ret_mask] if not self.ref_idx is None else -1e5,
                       'seq_len': len(self.all_images) }
 
         return sample
